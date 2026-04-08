@@ -1,13 +1,8 @@
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --background: #f3ede4;
+  --foreground: #1c1610;
+  --muted: #6f6258;
+  --border: #decfc0;
 }
 
 html {
@@ -25,8 +20,11 @@ body {
   display: flex;
   flex-direction: column;
   color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+  background:
+    radial-gradient(circle at top left, rgba(196, 102, 45, 0.12), transparent 28%),
+    radial-gradient(circle at top right, rgba(31, 109, 92, 0.12), transparent 24%),
+    linear-gradient(180deg, #f8f2ea, var(--background));
+  font-family: var(--font-body), sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -42,8 +40,20 @@ a {
   text-decoration: none;
 }
 
-@media (prefers-color-scheme: dark) {
-  html {
-    color-scheme: dark;
-  }
+main,
+body > div,
+body > section {
+  width: 100%;
+}
+
+body > * {
+  width: min(1220px, calc(100vw - 2rem));
+  margin-inline: auto;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-display), sans-serif;
 }
