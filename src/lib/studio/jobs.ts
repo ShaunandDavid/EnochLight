@@ -3,6 +3,10 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { JOB_STATUS_POLL_INTERVAL_MS, PLANNER_OPTIONS } from "@/lib/studio/constants";
+import {
+  getStudioReferenceAsset,
+  prepareStudioReferenceAsset,
+} from "@/lib/studio/assets";
 import { resolveStudioDuration } from "@/lib/studio/duration-plan";
 import { formatStudioError } from "@/lib/studio/errors";
 import {
@@ -39,6 +43,14 @@ studioGlobal.__studioActiveRuns = activeRuns;
 
 export async function createStudioJob(rawInput: GenerateVideoRequest): Promise<StudioJob> {
   const parsedInput = generateVideoRequestSchema.parse(rawInput);
+  const referenceAsset = parsedInput.referenceAssetId
+    ? await getStudioReferenceAsset(parsedInput.referenceAssetId)
+    : null;
+
+  if (parsedInput.referenceAssetId && !referenceAsset) {
+    throw new Error("The selected reference asset is no longer available. Upload it again.");
+  }
+
   const durationResolution = resolveStudioDuration(parsedInput);
   const executionPlan = durationResolution.segmentPlan.segments;
   const jobId = `studio_${crypto.randomUUID()}`;
@@ -58,6 +70,7 @@ export async function createStudioJob(rawInput: GenerateVideoRequest): Promise<S
     input: {
       ...resolvedInput,
       avoidList: normalizeAvoidList(resolvedInput.avoid),
+      referenceAsset: referenceAsset ?? undefined,
     },
     durationRecommendation: durationResolution.recommendation,
     executionPlan,
@@ -188,7 +201,7 @@ async function runStudioJob(jobId: string): Promise<void> {
       logs: [
         ...job.logs,
         createLogEntry(
-          `Building the Sora prompt plan with ${PLANNER_OPTIONS[job.input.plannerMode].model}.`,
+      `Building the Sora prompt plan with ${PLANNER_OPTIONS[job.input.plannerMode].model}.`,
         ),
       ],
     });
@@ -203,6 +216,7 @@ async function runStudioJob(jobId: string): Promise<void> {
       plannerMode: job.input.plannerMode,
       avoidList: job.input.avoidList,
       selectedModel: job.input.model,
+      referenceAsset: job.input.referenceAsset,
     }).catch(async (error) => {
       throw await failJob(job, error, "planning");
     });
@@ -219,6 +233,26 @@ async function runStudioJob(jobId: string): Promise<void> {
         ...job.segmentStates[index],
         prompt: index === 0 ? promptPlan.initialPrompt : promptPlan.extensionPrompts[index - 1],
       })),
+    });
+  }
+
+  if (job.input.referenceAsset && !job.referenceAssetPrepared) {
+    const preparedReferenceAsset = await prepareStudioReferenceAsset({
+      assetId: job.input.referenceAsset.id,
+      format: job.input.format,
+    }).catch(async (error) => {
+      throw await failJob(job, error, "planning");
+    });
+
+    job = await persistJob({
+      ...job,
+      referenceAssetPrepared: preparedReferenceAsset,
+      logs: [
+        ...job.logs,
+        createLogEntry(
+          `Prepared reference asset ${job.input.referenceAsset.originalFileName} for ${job.input.format}.`,
+        ),
+      ],
     });
   }
 
@@ -272,6 +306,7 @@ async function runStudioJob(jobId: string): Promise<void> {
               model: job.input.model,
               size: job.input.format,
               seconds: segment.seconds as 4 | 8 | 12,
+              referenceAsset: job.referenceAssetPrepared,
             })
           : await extendVideo({
               videoId: job.currentVideoId ?? "",

@@ -1,17 +1,30 @@
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { studioJobSchema, type StudioJob } from "@/lib/studio/types";
+import {
+  studioJobSchema,
+  studioReferenceAssetSchema,
+  type StudioJob,
+  type StudioReferenceAsset,
+} from "@/lib/studio/types";
 
 const storageRoot = path.join(process.cwd(), ".generated", "sora-social");
 const jobsDirectory = path.join(storageRoot, "jobs");
 const videosDirectory = path.join(storageRoot, "videos");
+const assetsDirectory = path.join(storageRoot, "assets");
+const assetRecordsDirectory = path.join(assetsDirectory, "records");
+const assetOriginalsDirectory = path.join(assetsDirectory, "originals");
+const assetPreparedDirectory = path.join(assetsDirectory, "prepared");
 
 export async function ensureStudioStorage(): Promise<void> {
   await Promise.all([
     mkdir(storageRoot, { recursive: true }),
     mkdir(jobsDirectory, { recursive: true }),
     mkdir(videosDirectory, { recursive: true }),
+    mkdir(assetsDirectory, { recursive: true }),
+    mkdir(assetRecordsDirectory, { recursive: true }),
+    mkdir(assetOriginalsDirectory, { recursive: true }),
+    mkdir(assetPreparedDirectory, { recursive: true }),
   ]);
 }
 
@@ -21,6 +34,18 @@ export function getStudioJobPath(jobId: string): string {
 
 export function getStudioVideoPath(fileName: string): string {
   return path.join(videosDirectory, fileName);
+}
+
+export function getStudioAssetRecordPath(assetId: string): string {
+  return path.join(assetRecordsDirectory, `${assetId}.json`);
+}
+
+export function getStudioAssetOriginalPath(fileName: string): string {
+  return path.join(assetOriginalsDirectory, fileName);
+}
+
+export function getStudioAssetPreparedPath(assetId: string, format: string): string {
+  return path.join(assetPreparedDirectory, `${assetId}-${format}.png`);
 }
 
 export async function readStudioJob(jobId: string): Promise<StudioJob | null> {
@@ -42,6 +67,27 @@ export async function writeStudioJob(job: StudioJob): Promise<StudioJob> {
   await ensureStudioStorage();
   await writeFile(getStudioJobPath(job.id), JSON.stringify(job, null, 2), "utf8");
   return job;
+}
+
+export async function readStudioReferenceAsset(assetId: string): Promise<StudioReferenceAsset | null> {
+  await ensureStudioStorage();
+
+  try {
+    const file = await readFile(getStudioAssetRecordPath(assetId), "utf8");
+    return studioReferenceAssetSchema.parse(JSON.parse(file));
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return null;
+    }
+
+    throw error;
+  }
+}
+
+export async function writeStudioReferenceAsset(asset: StudioReferenceAsset) {
+  await ensureStudioStorage();
+  await writeFile(getStudioAssetRecordPath(asset.id), JSON.stringify(asset, null, 2), "utf8");
+  return asset;
 }
 
 export async function listStudioJobs(limit = 12): Promise<StudioJob[]> {

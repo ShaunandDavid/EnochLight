@@ -46,6 +46,7 @@ export const generateVideoRequestSchema = z
     plannerMode: plannerModeSchema.optional().default("standard"),
     style: stylePresetSchema,
     avoid: z.string().trim().max(800).optional().default(""),
+    referenceAssetId: z.string().trim().min(1).optional(),
   })
   .superRefine((value, context) => {
     if (!isFormatSupportedByModel(value.model, value.format)) {
@@ -103,6 +104,28 @@ export const studioFinalAssetSchema = z.object({
   downloadUrl: z.string(),
 });
 
+export const studioReferenceAssetSchema = z.object({
+  id: z.string(),
+  createdAt: z.string(),
+  originalFileName: z.string(),
+  mimeType: z.string(),
+  bytes: z.number().int().positive(),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  localPath: z.string(),
+  previewUrl: z.string(),
+});
+
+export const studioPreparedReferenceAssetSchema = z.object({
+  assetId: z.string(),
+  format: formatSchema,
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  mimeType: z.string(),
+  localPath: z.string(),
+  previewUrl: z.string(),
+});
+
 export const studioDurationRecommendationSchema = z.object({
   mode: durationModeSchema,
   requestedDuration: z.number().int().positive(),
@@ -121,6 +144,7 @@ export const studioDurationRecommendationSchema = z.object({
 
 export const studioJobInputSchema = generateVideoRequestSchema.extend({
   avoidList: z.array(z.string()),
+  referenceAsset: studioReferenceAssetSchema.optional(),
 });
 
 export const studioJobSchema = z.object({
@@ -142,6 +166,7 @@ export const studioJobSchema = z.object({
   finalOpenAiVideoId: z.string().optional(),
   finalDuration: z.number().int().positive().optional(),
   downloadExpiresAt: z.number().nullable().optional(),
+  referenceAssetPrepared: studioPreparedReferenceAssetSchema.optional(),
   finalAsset: studioFinalAssetSchema.optional(),
   durationRecommendation: studioDurationRecommendationSchema.optional(),
   retryable: z.boolean(),
@@ -184,6 +209,8 @@ export type StudioError = z.infer<typeof studioErrorSchema>;
 export type StudioLogEntry = z.infer<typeof studioLogEntrySchema>;
 export type StudioSegmentState = z.infer<typeof studioSegmentStateSchema>;
 export type StudioFinalAsset = z.infer<typeof studioFinalAssetSchema>;
+export type StudioReferenceAsset = z.infer<typeof studioReferenceAssetSchema>;
+export type StudioPreparedReferenceAsset = z.infer<typeof studioPreparedReferenceAssetSchema>;
 export type StudioDurationRecommendation = z.infer<typeof studioDurationRecommendationSchema>;
 export type StudioJobInput = z.infer<typeof studioJobInputSchema>;
 export type StudioJob = z.infer<typeof studioJobSchema>;

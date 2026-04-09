@@ -1,3 +1,4 @@
+import { getStudioReferenceAsset } from "@/lib/studio/assets";
 import { resolveStudioDuration } from "@/lib/studio/duration-plan";
 import { planVideoPrompts } from "@/lib/studio/openai";
 import { generateVideoRequestSchema } from "@/lib/studio/types";
@@ -8,6 +9,14 @@ export const dynamic = "force-dynamic";
 export async function POST(request: Request) {
   try {
     const payload = generateVideoRequestSchema.parse(await request.json());
+    const referenceAsset = payload.referenceAssetId
+      ? await getStudioReferenceAsset(payload.referenceAssetId)
+      : null;
+
+    if (payload.referenceAssetId && !referenceAsset) {
+      throw new Error("The selected reference asset is no longer available. Upload it again.");
+    }
+
     const durationResolution = resolveStudioDuration(payload);
     const plan = await planVideoPrompts({
       roughIdea: payload.roughIdea,
@@ -22,6 +31,7 @@ export async function POST(request: Request) {
         .map((item) => item.trim())
         .filter(Boolean),
       selectedModel: payload.model,
+      referenceAsset: referenceAsset ?? undefined,
     });
 
     return Response.json(

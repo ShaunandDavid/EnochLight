@@ -1,6 +1,8 @@
 "use client";
 
+import Image from "next/image";
 import {
+  useRef,
   startTransition,
   useCallback,
   useEffect,
@@ -30,6 +32,7 @@ import type {
   GenerateVideoRequest,
   StudioJob,
   StudioJobSummary,
+  StudioReferenceAsset,
 } from "@/lib/studio/types";
 import styles from "./studio-page.module.css";
 
@@ -52,7 +55,23 @@ interface StudioPageProps {
   hasApiKey: boolean;
 }
 
-type StudioDraft = Partial<GenerateVideoRequest>;
+interface StudioDraft {
+  formState?: Partial<GenerateVideoRequest>;
+  manualDuration?: number;
+  referenceAsset?: StudioReferenceAsset | null;
+}
+
+type FilePickerWindow = Window &
+  typeof globalThis & {
+    showOpenFilePicker?: (options?: {
+      multiple?: boolean;
+      types?: Array<{
+        description?: string;
+        accept: Record<string, string[]>;
+      }>;
+      excludeAcceptAllOption?: boolean;
+    }) => Promise<Array<{ getFile(): Promise<File> }>>;
+  };
 
 export default function StudioPage({
   initialJobs,
@@ -60,13 +79,16 @@ export default function StudioPage({
 }: StudioPageProps) {
   const [formState, setFormState] = useState<GenerateVideoRequest>(defaultFormState);
   const [manualDuration, setManualDuration] = useState(defaultFormState.totalDuration);
+  const [referenceAsset, setReferenceAsset] = useState<StudioReferenceAsset | null>(null);
   const [recentJobs, setRecentJobs] = useState<StudioJobSummary[]>(initialJobs);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(
     initialJobs[0]?.id ?? null,
   );
   const [selectedJob, setSelectedJob] = useState<StudioJob | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isUploadingAsset, setIsUploadingAsset] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const referenceAssetInputRef = useRef<HTMLInputElement | null>(null);
 
   const refreshRecentJobs = useCallback(async () => {
     try {
@@ -107,19 +129,35 @@ export default function StudioPage({
         return;
       }
 
-      const parsedDraft = JSON.parse(rawDraft) as StudioDraft;
-      if (typeof parsedDraft.totalDuration === "number") {
-        setManualDuration(normalizeDurationOption(parsedDraft.totalDuration));
+      const parsedDraft = JSON.parse(rawDraft) as StudioDraft | Partial<GenerateVideoRequest>;
+      const draftWrapper = isStudioDraft(parsedDraft) ? parsedDraft : null;
+      const nextFormState: Partial<GenerateVideoRequest> =
+        draftWrapper?.formState ?? (parsedDraft as Partial<GenerateVideoRequest>);
+
+      if (typeof draftWrapper?.manualDuration === "number") {
+        setManualDuration(normalizeDurationOption(draftWrapper.manualDuration));
+      } else if (typeof nextFormState.totalDuration === "number") {
+        setManualDuration(normalizeDurationOption(nextFormState.totalDuration));
       }
-      setFormState(normalizeFormState(parsedDraft));
+      if (draftWrapper) {
+        setReferenceAsset(draftWrapper.referenceAsset ?? null);
+      }
+      setFormState(normalizeFormState(nextFormState));
     } catch {
       // Ignore malformed drafts and keep the UI usable.
     }
   }, []);
 
   useEffect(() => {
-    window.localStorage.setItem(draftStorageKey, JSON.stringify(formState));
-  }, [formState]);
+    window.localStorage.setItem(
+      draftStorageKey,
+      JSON.stringify({
+        formState,
+        manualDuration,
+        referenceAsset,
+      } satisfies StudioDraft),
+    );
+  }, [formState, manualDuration, referenceAsset]);
 
   useEffect(() => {
     void refreshRecentJobs();
@@ -233,6 +271,102 @@ export default function StudioPage({
     }
   }
 
+  async function handleReferenceAssetUpload(
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+
+    if (!file) {
+      return;
+    }
+
+    await uploadReferenceAssetFile(file);
+  }
+
+  async function uploadReferenceAssetFile(file: File) {
+    setErrorMessage(null);
+    setIsUploadingAsset(true);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const response = await fetch("/api/studio/assets", {
+        method: "POST",
+        body: formData,
+      });
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.error ?? "Failed to upload the reference asset.");
+      }
+
+      startTransition(() => {
+        setReferenceAsset(payload.asset);
+        setFormState((current) => ({
+          ...current,
+          referenceAssetId: payload.asset.id,
+        }));
+      });
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error ? error.message : "Failed to upload the reference asset.",
+      );
+    } finally {
+      setIsUploadingAsset(false);
+    }
+  }
+
+  async function openReferenceAssetPicker() {
+    if (isUploadingAsset || isAnyJobRunning || isSubmitting) {
+      return;
+    }
+
+    const pickerWindow = window as FilePickerWindow;
+    if (pickerWindow.showOpenFilePicker) {
+      try {
+        const [handle] = await pickerWindow.showOpenFilePicker({
+          multiple: false,
+          excludeAcceptAllOption: true,
+          types: [
+            {
+              description: "Reference images",
+              accept: {
+                "image/png": [".png"],
+                "image/jpeg": [".jpg", ".jpeg"],
+                "image/webp": [".webp"],
+              },
+            },
+          ],
+        });
+
+        if (!handle) {
+          return;
+        }
+
+        const file = await handle.getFile();
+        await uploadReferenceAssetFile(file);
+        return;
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
+        }
+
+        // Fall back to the hidden input if the picker API is unavailable or blocked.
+      }
+    }
+
+    referenceAssetInputRef.current?.click();
+  }
+
+  function clearReferenceAssetSelection() {
+    setReferenceAsset(null);
+    setFormState((current) => ({
+      ...current,
+      referenceAssetId: undefined,
+    }));
+  }
+
   function handlePlatformChange(nextPlatform: GenerateVideoRequest["platformPreset"]) {
     setFormState((current) => ({
       ...current,
@@ -281,7 +415,7 @@ export default function StudioPage({
   const isAnyJobRunning =
     recentJobs.some((job) => isJobActive(job.status)) ||
     Boolean(selectedJob && isJobActive(selectedJob.status));
-  const canGenerate = hasApiKey && !isSubmitting && !isAnyJobRunning;
+  const canGenerate = hasApiKey && !isSubmitting && !isUploadingAsset && !isAnyJobRunning;
 
   return (
     <div className={styles.page}>
@@ -362,6 +496,79 @@ export default function StudioPage({
                 Add a rough idea, then generate a continuous Sora plan and video chain.
               </small>
             </label>
+
+            <div className={styles.referenceAssetPanel}>
+              <div className={styles.referenceAssetHeader}>
+                <div>
+                  <span className={styles.referenceAssetTitle}>Reference asset (optional)</span>
+                  <small>
+                    Upload one PNG, JPEG, or WEBP logo or visual anchor. The server will fit it
+                    onto the exact selected render canvas before the first Sora generation.
+                  </small>
+                </div>
+                <div className={styles.uploadActionGroup}>
+                  <input
+                    ref={referenceAssetInputRef}
+                    accept="image/png,image/jpeg,image/webp"
+                    className={styles.hiddenFileInput}
+                    disabled={isUploadingAsset || isAnyJobRunning || isSubmitting}
+                    onChange={handleReferenceAssetUpload}
+                    type="file"
+                  />
+                  <button
+                    className={styles.uploadButton}
+                    disabled={isUploadingAsset || isAnyJobRunning || isSubmitting}
+                    onClick={() => {
+                      void openReferenceAssetPicker();
+                    }}
+                    type="button"
+                  >
+                    {isUploadingAsset
+                      ? "Uploading..."
+                      : referenceAsset
+                        ? "Replace asset"
+                        : "Upload asset"}
+                  </button>
+                </div>
+              </div>
+
+              {referenceAsset ? (
+                <div className={styles.referenceAssetCard}>
+                  <Image
+                    alt={`Reference asset ${referenceAsset.originalFileName}`}
+                    className={styles.referenceAssetPreview}
+                    src={referenceAsset.previewUrl}
+                    unoptimized
+                    width={84}
+                    height={84}
+                  />
+                  <div className={styles.referenceAssetMeta}>
+                    <strong>{referenceAsset.originalFileName}</strong>
+                    <p>
+                      Original asset: {referenceAsset.width}x{referenceAsset.height} •{" "}
+                      {referenceAsset.mimeType.replace("image/", "").toUpperCase()}
+                    </p>
+                    <p>
+                      Best for brand marks, product references, or a single visual identity anchor.
+                      If the current video API rejects a specific image, the app will show the real
+                      error instead of hiding it.
+                    </p>
+                  </div>
+                  <button
+                    className={styles.secondaryButton}
+                    onClick={clearReferenceAssetSelection}
+                    type="button"
+                  >
+                    Clear selection
+                  </button>
+                </div>
+              ) : (
+                <div className={styles.referenceAssetEmpty}>
+                  No asset selected yet. If you have a square logo, that is fine. The app will
+                  place it onto the chosen phone or widescreen canvas automatically.
+                </div>
+              )}
+            </div>
 
             <div className={styles.fieldGrid}>
               <label className={styles.field}>
@@ -611,6 +818,12 @@ export default function StudioPage({
                   <span className={styles.metaLabel}>Planner</span>
                   <strong>{PLANNER_OPTIONS[selectedJob.input.plannerMode].model}</strong>
                 </div>
+                {selectedJob.input.referenceAsset ? (
+                  <div>
+                    <span className={styles.metaLabel}>Reference asset</span>
+                    <strong>{selectedJob.input.referenceAsset.originalFileName}</strong>
+                  </div>
+                ) : null}
               </div>
 
               <div className={styles.previewArea}>
@@ -664,6 +877,32 @@ export default function StudioPage({
                       <span className={styles.metaLabel}>Optimized master prompt</span>
                       <p>{selectedJob.promptPlan.masterPrompt}</p>
                     </div>
+                    {selectedJob.input.referenceAsset ? (
+                      <div>
+                        <span className={styles.metaLabel}>Reference asset used</span>
+                        <div className={styles.referenceAssetDetails}>
+                          <Image
+                            alt={`Reference asset ${selectedJob.input.referenceAsset.originalFileName}`}
+                            className={styles.referenceAssetDetailsPreview}
+                            src={
+                              selectedJob.referenceAssetPrepared?.previewUrl ??
+                              selectedJob.input.referenceAsset.previewUrl
+                            }
+                            unoptimized
+                            width={84}
+                            height={84}
+                          />
+                          <div>
+                            <p>{selectedJob.input.referenceAsset.originalFileName}</p>
+                            <p className={styles.muted}>
+                              {selectedJob.referenceAssetPrepared
+                                ? `Prepared for ${selectedJob.referenceAssetPrepared.format} before the initial Sora generation.`
+                                : "Stored with the job as the uploaded visual reference."}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
                     <div>
                       <span className={styles.metaLabel}>Initial prompt</span>
                       <p>{selectedJob.promptPlan.initialPrompt}</p>
@@ -826,6 +1065,10 @@ function summarizeJob(job: StudioJob): StudioJobSummary {
     finalOpenAiVideoId: job.finalOpenAiVideoId ?? null,
     retryable: job.retryable,
   };
+}
+
+function isStudioDraft(value: unknown): value is StudioDraft {
+  return typeof value === "object" && value !== null && "formState" in value;
 }
 
 function normalizeFormState(

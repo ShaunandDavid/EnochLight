@@ -233,6 +233,16 @@ export function getFormatOptionLabel(
   return label;
 }
 
+export function getFormatDimensions(format: (typeof FORMAT_IDS)[number]) {
+  const [width, height] = format.split("x").map((value) => Number.parseInt(value, 10));
+
+  if (!Number.isFinite(width) || !Number.isFinite(height)) {
+    throw new Error(`Invalid format dimensions: ${format}`);
+  }
+
+  return { width, height };
+}
+
 export const JOB_PHASES = [
   "created",
   "planning",

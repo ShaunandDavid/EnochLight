@@ -179,6 +179,104 @@
   line-height: 1.5;
 }
 
+.referenceAssetPanel {
+  display: grid;
+  gap: 0.9rem;
+  padding: 1rem 1.05rem;
+  border: 1px solid #d9cabd;
+  border-radius: 1.1rem;
+  background: #fffdf9;
+}
+
+.referenceAssetHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.referenceAssetTitle {
+  display: block;
+  font-weight: 700;
+  margin-bottom: 0.25rem;
+}
+
+.uploadButton {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.75rem;
+  min-width: 8rem;
+  border-radius: 999px;
+  border: 1px solid #d9cabd;
+  background: #fff8f2;
+  color: var(--foreground);
+  cursor: pointer;
+  font-weight: 600;
+  padding: 0.8rem 1.1rem;
+}
+
+.uploadButton input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.uploadButton:has(input:disabled) {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.referenceAssetCard,
+.referenceAssetDetails {
+  display: grid;
+  gap: 0.9rem;
+  align-items: center;
+}
+
+.referenceAssetCard {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  padding: 0.95rem;
+  border: 1px solid #e6d7c8;
+  border-radius: 1rem;
+  background: linear-gradient(135deg, rgba(243, 233, 222, 0.55), rgba(255, 252, 248, 0.96));
+}
+
+.referenceAssetDetails {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.referenceAssetPreview,
+.referenceAssetDetailsPreview {
+  width: 5.25rem;
+  height: 5.25rem;
+  object-fit: cover;
+  border-radius: 1rem;
+  border: 1px solid #dbc8b8;
+  background: #f3ece4;
+}
+
+.referenceAssetMeta {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.referenceAssetMeta p,
+.referenceAssetDetails p {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.referenceAssetEmpty {
+  padding: 0.95rem 1rem;
+  border: 1px dashed #d8c8bb;
+  border-radius: 1rem;
+  color: var(--muted);
+  background: linear-gradient(135deg, rgba(244, 235, 227, 0.45), rgba(255, 252, 248, 0.9));
+}
+
 .recommendationPanel {
   display: grid;
   gap: 0.55rem;
@@ -430,6 +528,15 @@
   .mainGrid,
   .recentJobsGrid,
   .fieldGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .referenceAssetHeader {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .referenceAssetCard {
     grid-template-columns: 1fr;
   }
 }

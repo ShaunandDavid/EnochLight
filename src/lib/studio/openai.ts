@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+
 import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 
@@ -13,6 +15,8 @@ import { formatStudioError } from "@/lib/studio/errors";
 import {
   promptPlanSchema,
   type VideoPromptPlan,
+  type StudioPreparedReferenceAsset,
+  type StudioReferenceAsset,
   type StudioFormat,
   type StudioPlannerMode,
   type StudioVideoModel,
@@ -28,6 +32,7 @@ interface PlanVideoPromptsArgs {
   avoidList: string[];
   selectedModel: StudioVideoModel;
   plannerMode: StudioPlannerMode;
+  referenceAsset?: Pick<StudioReferenceAsset, "originalFileName" | "width" | "height">;
 }
 
 interface CreateInitialVideoArgs {
@@ -35,6 +40,7 @@ interface CreateInitialVideoArgs {
   model: StudioVideoModel;
   size: StudioFormat;
   seconds: 4 | 8 | 12;
+  referenceAsset?: StudioPreparedReferenceAsset;
 }
 
 interface ExtendVideoArgs {
@@ -76,6 +82,7 @@ export async function planVideoPrompts(args: PlanVideoPromptsArgs) {
   const style = STYLE_PRESETS[args.style];
   const planner = PLANNER_OPTIONS[args.plannerMode];
   const expectedExtensionCount = Math.max(args.executionPlan.length - 1, 0);
+  const pacingGuidance = buildPacingGuidanceLines(args.roughIdea, expectedExtensionCount);
 
   const response = await client.responses.parse({
     model: planner.model,
@@ -101,12 +108,20 @@ export async function planVideoPrompts(args: PlanVideoPromptsArgs) {
           `Avoid directives from the user: ${
             args.avoidList.length > 0 ? args.avoidList.join(", ") : "none supplied"
           }.`,
+          args.referenceAsset
+            ? `A reference asset will also be supplied to Sora: ${args.referenceAsset.originalFileName} (${args.referenceAsset.width}x${args.referenceAsset.height}). Treat it as a visual identity anchor and preserve its recognizable structure when it appears in-frame.`
+            : "No reference asset will be supplied.",
           "Return structured JSON only.",
           "Master prompt rules:",
           "- Write like a premium director brief, not vague user language.",
           "- Keep one continuous scene and visual world instead of a montage.",
           "- Be specific about subject, action, camera, lighting, palette, texture, pace, and motion.",
           "- Optimize for social media watchability and clean visual intent.",
+          args.referenceAsset
+            ? "- If the reference asset is staged in the video, preserve its key letterforms, silhouette, geometry, and core color logic instead of morphing it into a different brand mark or prop."
+            : "- If you introduce branding, keep it coherent and readable.",
+          "Pacing rules:",
+          ...pacingGuidance,
           "Initial prompt rules:",
           "- Establish the subject, setting, camera language, lighting motivation, palette, and movement clearly.",
           "- Make the first seconds immediately compelling.",
@@ -115,6 +130,8 @@ export async function planVideoPrompts(args: PlanVideoPromptsArgs) {
           "- Every extension prompt must continue directly from the previous finished frame.",
           "- Explicitly preserve subject continuity, camera direction, lighting logic, palette, motion continuity, and scene intent.",
           "- Do not reset the scene, introduce abrupt cuts, or jump to unrelated compositions.",
+          "- Every non-final extension must keep forward momentum and should hand off into the next beat while motion or intent is still active.",
+          "- Only the final extension may settle into a hero hold or brand lock, and that hold should happen in the final 10-15% of the total video rather than early.",
           "Avoid list rules:",
           "- Include the user's avoid items plus any continuity hazards you think matter.",
         ].join("\n"),
@@ -156,11 +173,16 @@ export async function planVideoPrompts(args: PlanVideoPromptsArgs) {
 }
 
 export async function createInitialVideo(args: CreateInitialVideoArgs) {
-  return getOpenAIClient().videos.create({
+  const inputReference = args.referenceAsset
+    ? await createVideoInputReference(args.referenceAsset.localPath, args.referenceAsset.mimeType)
+    : undefined;
+
+  return createVideoJob({
     model: args.model,
     prompt: args.prompt,
     size: args.size,
     seconds: String(args.seconds) as OpenAI.Videos.VideoSeconds,
+    input_reference: inputReference,
   });
 }
 
@@ -240,6 +262,7 @@ async function repairPromptPlan(args: {
           `The initialPrompt already covers segment 1.`,
           `Return exactly ${args.expectedExtensionCount} extension prompts for the continuation segments only.`,
           "Do not add or remove any fields from the JSON schema.",
+          "Keep middle-section momentum active and reserve any true hero hold or brand settle for only the tail of the final extension.",
           "If there are too many extension prompts, merge or remove the least necessary extras while preserving continuity.",
           "If there are too few extension prompts, split or expand the later beats so every remaining segment has one continuation prompt.",
           `Original plan JSON: ${JSON.stringify(args.originalPlan)}`,
@@ -289,6 +312,90 @@ export function coercePromptPlanExtensionCount(
     ...plan,
     extensionPrompts: prompts,
   };
+}
+
+export function buildPacingGuidanceLines(
+  roughIdea: string,
+  expectedExtensionCount: number,
+) {
+  const dialogueLed = isDialogueLedBrief(roughIdea);
+
+  const guidance = [
+    "- Quiet atmosphere is allowed when visual progression remains active, but do not create dead air where the subject, camera, and environment all stall at once.",
+    "- Use the first moments for hook/setup and the final moments for payoff/landing; do not spend that breathing room as an early mid-video settle.",
+  ];
+
+  if (expectedExtensionCount > 0) {
+    guidance.push(
+      "- The middle stretch of the video must keep progressing through action, camera movement, UI evolution, expression change, or environmental motion.",
+    );
+  }
+
+  if (dialogueLed) {
+    guidance.push(
+      "- This brief is dialogue-led, so avoid long idle beats between spoken ideas. If one line finishes, bridge into the next visual or performance beat within about 1 second unless this is the final hold.",
+    );
+    guidance.push(
+      "- Do not let the speaker emotionally resolve too early. Keep performance energy and blocking active until the final payoff window.",
+    );
+  } else {
+    guidance.push(
+      "- This brief may rely more on visual storytelling, so cinematic breathing room is fine, but avoid any 3-5 second flatline before the final payoff.",
+    );
+  }
+
+  return guidance;
+}
+
+export function isDialogueLedBrief(roughIdea: string) {
+  return /\b(spoken script|spokesperson|voiceover|speaks?|talks?|says|direct to camera|narrat(?:e|ion|or)|dialogue)\b/i.test(
+    roughIdea,
+  ) || /["“”]/.test(roughIdea);
+}
+
+export async function createVideoInputReference(localPath: string, mimeType: string) {
+  const fileBytes = await readFile(localPath);
+  return {
+    image_url: toDataUrl(fileBytes, mimeType),
+  } satisfies OpenAI.Videos.ImageInputReferenceParam;
+}
+
+export function toDataUrl(bytes: Uint8Array, mimeType: string) {
+  return `data:${mimeType};base64,${Buffer.from(bytes).toString("base64")}`;
+}
+
+async function createVideoJob(body: {
+  model: StudioVideoModel;
+  prompt: string;
+  size: StudioFormat;
+  seconds: OpenAI.Videos.VideoSeconds;
+  input_reference?: OpenAI.Videos.ImageInputReferenceParam;
+}) {
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  if (!apiKey) {
+    throw new Error("Missing OPENAI_API_KEY. Add it to your local environment before generating.");
+  }
+
+  // The current Node SDK hardcodes videos.create() to multipart. A direct JSON call is
+  // more reliable for input_reference objects that contain large data URLs.
+  const response = await fetch("https://api.openai.com/v1/videos", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  const payload = (await response.json()) as OpenAI.Videos.Video & {
+    error?: { message?: string } | null;
+  };
+
+  if (!response.ok) {
+    throw new Error(payload.error?.message ?? "Failed to create the initial Sora video.");
+  }
+
+  return payload;
 }
 
 function sleep(milliseconds: number) {

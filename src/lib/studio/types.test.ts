@@ -44,6 +44,17 @@ describe("generateVideoRequestSchema", () => {
       }),
     ).toThrow(/does not support/);
   });
+
+  it("accepts an optional uploaded reference asset id", () => {
+    const parsed = generateVideoRequestSchema.parse({
+      ...baseRequest,
+      format: "720x1280",
+      model: "sora-2",
+      referenceAssetId: "asset_123",
+    });
+
+    expect(parsed.referenceAssetId).toBe("asset_123");
+  });
 });
 
 describe("format labels", () => {
